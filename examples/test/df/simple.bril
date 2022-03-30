@@ -1,0 +1,7 @@
+# ARGS: cprop
+
+@main(cond: bool) {
+  a: int = const 47;
+  b: int = const 42;
+  c: int = add a b;
+}

@@ -1,4 +1,4 @@
-# ARGS: live
+# ARGS: cprop
 
 @main {
   a: int = const 47;
