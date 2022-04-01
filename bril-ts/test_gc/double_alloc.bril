@@ -1,0 +1,7 @@
+@main {
+  ten: int = const 10;
+  myptr: ptr<int> = alloc ten;
+  # free myptr;
+  myptr: ptr<int> = alloc ten;
+  # free myptr;
+}

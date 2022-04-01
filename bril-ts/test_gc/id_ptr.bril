@@ -1,0 +1,6 @@
+@main {
+  ten: int = const 10;
+  myptr: ptr<int> = alloc ten;
+  myptr2 : ptr<int> = id myptr;
+  # ret;
+}

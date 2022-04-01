@@ -21,6 +21,68 @@ function error(message: string): BriliError {
 }
 
 /**
+ * Class for Reference Counting-based Garbage Collection. 
+ * Stores a Map from Key.base to Count. (address to reference count)
+ */
+class RCGC {
+  private counts: Map<number, number>;
+  private heap: Heap<Value>;
+
+  constructor(heap: Heap<Value>) {
+        this.heap = heap;
+        this.counts = new Map();
+  }
+
+  // increment the reference count of the given address
+  inc(base: number) {
+    let count = this.counts.get(base);
+    if (count === undefined) {
+      count = 0;
+    }
+    count++;
+    this.counts.set(base, count);
+  }
+
+  // decrement the reference count of the given address
+  dec(base: number) {
+    let count = this.counts.get(base);
+    if (count === undefined) {
+      throw error("[Reference Counting GC] dec: base not found");
+    }
+    count--;
+    this.counts.set(base, count);
+    // when the reference count reaches 0, free the address in the heap
+    if (count == 0) {
+      let key = new Key(base, 0);
+      this.heap.free(key);
+      this.counts.delete(base);
+    }
+  }
+
+  // increment all the reference counts in counts Map by one
+  incAll() {
+    for (let [base, count] of this.counts) {
+      this.inc(base);
+    }
+  }
+
+  // decrement all the reference counts in counts Map by one
+  decAll() {
+    for (let [base, count] of this.counts) {
+      this.dec(base);
+    }
+  }
+
+  // show the reference counts in the counts Map. For Debugging
+  show() {
+    for (let [base, count] of this.counts) {
+      console.log(`base ${base}: count ${count}`);
+    }
+  }
+
+}
+
+/**
  * An abstract key class used to access the heap.
  * This allows for "pointer arithmetic" on keys,
  * while still allowing lookups based on the based pointer of each allocation.
@@ -70,6 +132,7 @@ export class Heap<X> {
         }
         let base = this.getNewBase();
         this.storage.set(base, new Array(amt))
+        // console.log(`Allocated ${amt} entries at base ${base}`);
         return new Key(base, 0);
     }
 
@@ -310,6 +373,9 @@ type State = {
 
   // For speculation: the state at the point where speculation began.
   specparent: State | null,
+
+  // For Garbage Collection: record the reference counts of each pointers, free them when they're no longer referenced.
+  rcgc: RCGC,
 }
 
 /**
@@ -354,6 +420,7 @@ function evalCall(instr: bril.Operation, state: State): Action {
     lastlabel: null,
     curlabel: null,
     specparent: null,  // Speculation not allowed.
+    rcgc: state.rcgc,
   }
   let retVal = evalFunc(func, newState);
   state.icount = newState.icount;
@@ -392,6 +459,8 @@ function evalCall(instr: bril.Operation, state: State): Action {
   return NEXT;
 }
 
+
+
 /**
  * Interpret an instruction in a given environment, possibly updating the
  * environment. If the instruction branches to a new label, return that label;
@@ -400,6 +469,8 @@ function evalCall(instr: bril.Operation, state: State): Action {
  */
 function evalInstr(instr: bril.Instruction, state: State): Action {
   state.icount += BigInt(1);
+
+  // console.log(`instr op: ${instr.op}`)
 
   // Check that we have the right number of arguments.
   if (instr.op !== "const") {
@@ -437,6 +508,12 @@ function evalInstr(instr: bril.Instruction, state: State): Action {
   case "id": {
     let val = getArgument(instr, state.env, 0);
     state.env.set(instr.dest, val);
+    // RCGC: if the value is a pointer, increment its reference count.
+    // let typ = instr.type;
+    // if (typeof typ === "object" && typ.hasOwnProperty('ptr')) {
+    //   let ptr : Pointer = val as Pointer;
+    //   state.rcgc.inc(ptr.loc.base);
+    // }
     return NEXT;
   }
 
@@ -593,9 +670,19 @@ function evalInstr(instr: bril.Instruction, state: State): Action {
   case "ret": {
     let args = instr.args || [];
     if (args.length == 0) {
+      // RCGC: decrease all the pointers by one
+      state.rcgc.decAll();
       return {"action": "end", "ret": null};
     } else if (args.length == 1) {
       let val = get(state.env, args[0]);
+      // RCGC: if the return value is a Pointer, need to keep it alive: increase its reference count by one at first
+      if (val.hasOwnProperty("loc")) {
+        let ptr : Pointer = val as Pointer
+        // console.log("Return value is a pointer:", ptr);
+        state.rcgc.inc(ptr.loc.base);
+      }
+      // RCGC: decrease all the pointers by one
+      state.rcgc.decAll();
       return {"action": "end", "ret": val};
     } else {
       throw error(`ret takes 0 or 1 argument(s); got ${args.length}`);
@@ -607,6 +694,7 @@ function evalInstr(instr: bril.Instruction, state: State): Action {
   }
 
   case "call": {
+    state.rcgc.incAll();
     return evalCall(instr, state);
   }
 
@@ -618,6 +706,10 @@ function evalInstr(instr: bril.Instruction, state: State): Action {
     }
     let ptr = alloc(typ, Number(amt), state.heap);
     state.env.set(instr.dest, ptr);
+
+    // RCGC: increase the pointer's reference count by one
+    state.rcgc.inc(ptr.loc.base);
+    // state.rcgc.show()
     return NEXT;
   }
 
@@ -715,6 +807,8 @@ function evalFunc(func: bril.Function, state: State): Value | null {
       switch (action.action) {
       case 'end': {
         // Return from this function.
+
+
         return action.ret;
       }
       case 'speculate': {
@@ -778,6 +872,10 @@ function evalFunc(func: bril.Function, state: State): Value | null {
   if (state.specparent) {
     throw error(`implicit return in speculative state`);
   }
+  // implicit return (no return statement)
+  // RCGC: decrease all
+  state.rcgc.decAll();
+  
   return null;
 }
 
@@ -843,8 +941,11 @@ function evalProg(prog: bril.Program) {
     lastlabel: null,
     curlabel: null,
     specparent: null,
+    rcgc: new RCGC(heap),
   }
   evalFunc(main, state);
+
+  // state.rcgc.show(); // Print nothing means all memory locations are freed. 
 
   if (!heap.isEmpty()) {
     throw error(`Some memory locations have not been freed by end of execution.`);

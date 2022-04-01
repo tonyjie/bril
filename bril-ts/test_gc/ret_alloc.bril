@@ -1,0 +1,18 @@
+@f : ptr<int> {
+  ten: int = const 10;
+  ptr1: ptr<int> = alloc ten;
+  retptr: ptr<int> = alloc ten;
+  ret retptr;
+}
+
+@g : int {
+  ten: int = const 10;
+  ret ten;
+}
+
+@main {
+  one: int = const 1;
+  myptr : ptr<int> = call @f;
+  store myptr one;
+  ten: int = call @g;
+}
