@@ -399,6 +399,10 @@ function evalCall(instr: bril.Operation, state: State): Action {
  * instruction or "end" to terminate the function.
  */
 function evalInstr(instr: bril.Instruction, state: State): Action {
+  // print output trace. 
+  // ">" prefix is to distinguish from the normal print output.
+  console.log(">", JSON.stringify(instr));
+
   state.icount += BigInt(1);
 
   // Check that we have the right number of arguments.
